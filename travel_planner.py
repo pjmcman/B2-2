@@ -113,6 +113,67 @@ def search_places(city):
         print("  - 네트워크/요청 오류로 맛집 검색 실패. 계속 진행합니다.")
         return []
 
+def generate_final_report(date_str, rec_data, places):
+    """LLM을 연동해 최종 Markdown 여행 리포트 생성"""
+    print("\n[3/3] 최종 리포트 생성 중(LLM)...")
+
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+        print("  - [안내] API 키 미설정 모드로 기본 템플릿 리포트를 생성합니다.")
+        places_text = "\n".join([f"- **{p['name']}**: {p['address']}" for p in places]) if places else "- 데이터 없음 (장소 검색 결과 0건)"
+        return f"""# {date_str} 국내 여행 추천 리포트
+
+## 추천 지역
+{rec_data.get('recommended_city')}
+
+## 추천 이유
+{rec_data.get('reason')}
+
+## 날씨 요약
+{rec_data.get('weather')}
+
+## 행사/축제
+{', '.join(rec_data.get('events', [])) if rec_data.get('events') else '없음'}
+
+## 맛집 추천
+{places_text}
+
+## 1일 추천 일정
+- **오전**: {rec_data.get('recommended_city')} 주요 명소 산책 및 가벼운 아침 식사
+- **오후**: 추천 맛집 방문 및 지역 대표 문화/자연 체험
+- **저녁**: 지역 야경 감상 및 맛있는 저녁 식사 후 일과 마무리
+"""
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    prompt = f"""
+    아래 정보를 바탕으로 깔끔하고 가독성 뛰어난 Markdown 형식의 국내 여행 추천 리포트를 작성해 주세요.
+
+    - 여행 날짜: {date_str}
+    - 추천 지역: {rec_data.get('recommended_city')}
+    - 날씨: {rec_data.get('weather')}
+    - 행사/축제: {', '.join(rec_data.get('events', []))}
+    - 추천 이유: {rec_data.get('reason')}
+    - 맛집 목록: {json.dumps(places, ensure_ascii=False) if places else "데이터 없음"}
+
+    [필수 목차]
+    # {date_str} 국내 여행 추천 리포트
+    ## 추천 지역
+    ## 추천 이유
+    ## 날씨 요약
+    ## 행사/축제
+    ## 맛집 추천 (데이터가 없으면 '데이터 없음'으로 표기)
+    ## 1일 일정 제안 (오전/오후/저녁)
+    """
+
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        errors_log.append({"step": "report_generation", "type": "LLM_ERROR", "message": str(e)})
+        return f"# {date_str} 국내 여행 추천 리포트\n\n[오류 발생] 리포트 생성 실패: {str(e)}"
+
 def main():
     parser = argparse.ArgumentParser(description="AI 여행 플래너 CLI")
     parser.add_argument("-date", required=True, help="여행 날짜 (YYYY-MM-DD)")
@@ -125,6 +186,27 @@ def main():
 
     # 2단계: 맛집 검색
     places = search_places(rec_data.get("recommended_city", ""))
+
+    # 3단계: 최종 리포트 생성
+    report_md = generate_final_report(target_date, rec_data, places)
+
+    # 4단계: results/ 폴더 생성 및 저장
+    os.makedirs("results", exist_ok=True)
+
+    raw_json_path = f"results/{target_date}_raw.json"
+    raw_data = {
+        "recommendation": rec_data,
+        "places": places,
+        "errors": errors_log
+    }
+    with open(raw_json_path, "w", encoding="utf-8") as f:
+        json.dump(raw_data, f, ensure_ascii=False, indent=2)
+
+    report_path = f"results/{target_date}_travel_plan.md"
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(report_md)
+
+    print(f"\n완료! {report_path} 를 확인하세요.")
 
 if __name__ == "__main__":
     main()
