@@ -2,6 +2,7 @@ import os
 import json
 import argparse
 from datetime import datetime
+import requests
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -9,6 +10,7 @@ from google.genai import types
 # .env 환경변수 로드
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
 
 errors_log = []
 
@@ -46,7 +48,6 @@ def get_llm_recommendation(date_str):
     - reason: 추천 이유 2~4문장
     """
 
-    # 파싱 실패 대비 최대 1회 재시도
     for attempt in range(2):
         try:
             response = client.models.generate_content(
@@ -69,6 +70,49 @@ def get_llm_recommendation(date_str):
                     "reason": "JSON 파싱 실패로 기본 추천 데이터가 적용되었습니다."
                 }
 
+def search_places(city):
+    """지도/장소 API를 사용하여 추천 도시 맛집 N곳 검색 (실패 시에도 에러 기록 후 빈 리스트 반환)"""
+    print("\n[2/3] 맛집 검색 중(지도/장소 API)...")
+
+    if not KAKAO_REST_API_KEY or KAKAO_REST_API_KEY == "your_kakao_api_key_here":
+        print("  [주의] KAKAO_REST_API_KEY가 설정되지 않았습니다. 맛집 섹션은 '데이터 없음' 처리됩니다.")
+        errors_log.append({"step": "place_search", "type": "NO_API_KEY", "message": "Kakao REST API Key is missing"})
+        return []
+
+    url = "https://dapi.kakao.com/v2/local/search/keyword.json"
+    headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
+    params = {"query": f"{city} 맛집", "size": 5}
+
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=5)
+        if res.status_code != 200:
+            errors_log.append({"step": "place_search", "type": f"HTTP_{res.status_code}", "message": res.text})
+            print(f"  - 지도 API 오류 발생 (HTTP {res.status_code}). '데이터 없음'으로 진행합니다.")
+            return []
+
+        documents = res.json().get("documents", [])
+        if not documents:
+            errors_log.append({"step": "place_search", "type": "EMPTY_RESULT", "message": f"0 results for query={city} 맛집"})
+            print("  - 검색 결과가 0건입니다.")
+            return []
+
+        places = []
+        for doc in documents:
+            places.append({
+                "name": doc.get("place_name"),
+                "address": doc.get("road_address_name") or doc.get("address_name"),
+                "category": doc.get("category_name"),
+                "url": doc.get("place_url"),
+                "x": doc.get("x"),
+                "y": doc.get("y")
+            })
+        print(f"  - 맛집 {len(places)}곳 검색 완료")
+        return places
+    except Exception as e:
+        errors_log.append({"step": "place_search", "type": "NETWORK_ERROR", "message": str(e)})
+        print("  - 네트워크/요청 오류로 맛집 검색 실패. 계속 진행합니다.")
+        return []
+
 def main():
     parser = argparse.ArgumentParser(description="AI 여행 플래너 CLI")
     parser.add_argument("-date", required=True, help="여행 날짜 (YYYY-MM-DD)")
@@ -76,8 +120,11 @@ def main():
     args = parser.parse_args()
     target_date = validate_date(args.date)
 
-    # 1차 추천 실행
+    # 1단계: 1차 추천
     rec_data = get_llm_recommendation(target_date)
+
+    # 2단계: 맛집 검색
+    places = search_places(rec_data.get("recommended_city", ""))
 
 if __name__ == "__main__":
     main()
