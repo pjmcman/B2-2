@@ -32,3 +32,40 @@ python travel_planner.py -date 2026-08-15
 ### 3. 결과물 위치
 - JSON 원본: `results/YYYY-MM-DD_raw.json`
 - Markdown 보고서: `results/YYYY-MM-DD_travel_plan.md`
+
+### 4. 캐시 파일 형식
+같은 날짜를 다시 실행하면 기존 결과를 재사용합니다. 저장되는 JSON은 다음 구조를 유지합니다.
+```json
+{
+  "recommendation": {
+    "recommended_city": "제주",
+    "recommended_cities": ["제주", "강릉", "속초"],
+    "weather": "...",
+    "events": ["..."],
+    "reason": "..."
+  },
+  "places": [
+    {"name": "맛집명", "address": "주소", "category": "음식점", "url": "https://...", "x": "127.0", "y": "37.0"}
+  ],
+  "errors": [],
+  "cache_meta": {
+    "date": "2026-08-15",
+    "source": "fresh_generation",
+    "version": "1.0"
+  }
+}
+```
+
+---
+
+## 🧩 보너스 미션 구현 내용
+다음 두 가지 보너스 기능을 추가로 구현했습니다.
+
+1. **복수 지역 추천**
+   - 단일 도시 대신 `recommended_cities` 배열을 함께 생성합니다.
+   - 대표 도시와 후보 도시를 함께 관리합니다.
+2. **결과 캐싱**
+   - 같은 날짜로 재실행하면 기존 결과 파일을 읽어 API 재호출을 건너뛰고 빠르게 리포트를 재생성합니다.
+   - `cache_meta`에 캐시 원본 정보와 버전 정보를 기록합니다.
+
+---
