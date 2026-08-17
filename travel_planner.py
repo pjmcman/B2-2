@@ -4,13 +4,14 @@ import argparse
 from datetime import datetime
 import requests
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 # .env 환경변수 로드
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
 errors_log = []
 
@@ -28,8 +29,8 @@ def get_llm_recommendation(date_str):
     """LLM을 이용해 입력 날짜 기반 여행지/날씨/행사 추천 (JSON 반환)"""
     print("\n[1/3] 1차 추천 생성 중(LLM)...")
 
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        print("  [주의] GEMINI_API_KEY가 설정되지 않았습니다. 기본 테스트 데이터를 사용합니다.")
+    if not GROQ_API_KEY or GROQ_API_KEY == "your_groq_api_key_here":
+        print("  [주의] GROQ_API_KEY가 설정되지 않았습니다. 기본 테스트 데이터를 사용합니다.")
         return {
             "recommended_city": "제주",
             "weather": "8월 중순 평균 28°C 내외, 다소 습하고 무더움",
@@ -37,7 +38,7 @@ def get_llm_recommendation(date_str):
             "reason": "8월 중순은 제주의 해변과 물놀이를 즐기기 좋은 시기입니다."
         }
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
     prompt = f"""
     여행 날짜 '{date_str}'에 어울리는 국내 여행지 1곳을 추천해 주세요.
     응답은 반드시 아래 필드를 포함하는 JSON 형식이어야 합니다.
@@ -50,14 +51,12 @@ def get_llm_recommendation(date_str):
 
     for attempt in range(2):
         try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
+            response = client.responses.create(
+                model=GROQ_MODEL,
+                input=prompt,
+                text={"format": {"type": "json_object"}}
             )
-            data = json.loads(response.text)
+            data = json.loads(response.output_text)
             print(f"  - recommended_city: \"{data.get('recommended_city')}\"")
             return data
         except Exception as e:
@@ -113,14 +112,14 @@ def search_places(city):
         print("  - 네트워크/요청 오류로 맛집 검색 실패. 계속 진행합니다.")
         return []
 
-def generate_final_report(date_str, rec_data, places):
-    """LLM을 연동해 최종 Markdown 여행 리포트 생성"""
-    print("\n[3/3] 최종 리포트 생성 중(LLM)...")
+def build_fallback_report(date_str, rec_data, places, error_message=None):
+    """LLM 보고서 생성이 실패해도 저장 가능한 기본 Markdown 리포트를 만든다."""
+    places_text = "\n".join(
+        [f"- **{p['name']}**: {p['address']} ({p['url']})" for p in places]
+    ) if places else "- 데이터 없음 (장소 검색 결과 0건)"
+    error_text = f"\n\n## 참고\nLLM 보고서 생성 실패: {error_message}\n" if error_message else ""
 
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        print("  - [안내] API 키 미설정 모드로 기본 템플릿 리포트를 생성합니다.")
-        places_text = "\n".join([f"- **{p['name']}**: {p['address']}" for p in places]) if places else "- 데이터 없음 (장소 검색 결과 0건)"
-        return f"""# {date_str} 국내 여행 추천 리포트
+    return f"""# {date_str} 국내 여행 추천 리포트
 
 ## 추천 지역
 {rec_data.get('recommended_city')}
@@ -140,10 +139,18 @@ def generate_final_report(date_str, rec_data, places):
 ## 1일 추천 일정
 - **오전**: {rec_data.get('recommended_city')} 주요 명소 산책 및 가벼운 아침 식사
 - **오후**: 추천 맛집 방문 및 지역 대표 문화/자연 체험
-- **저녁**: 지역 야경 감상 및 맛있는 저녁 식사 후 일과 마무리
+- **저녁**: 지역 야경 감상 및 맛있는 저녁 식사 후 일과 마무리{error_text}
 """
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+def generate_final_report(date_str, rec_data, places):
+    """LLM을 연동해 최종 Markdown 여행 리포트 생성"""
+    print("\n[3/3] 최종 리포트 생성 중(LLM)...")
+
+    if not GROQ_API_KEY or GROQ_API_KEY == "your_groq_api_key_here":
+        print("  - [안내] API 키 미설정 모드로 기본 템플릿 리포트를 생성합니다.")
+        return build_fallback_report(date_str, rec_data, places)
+
+    client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
     prompt = f"""
     아래 정보를 바탕으로 깔끔하고 가독성 뛰어난 Markdown 형식의 국내 여행 추천 리포트를 작성해 주세요.
 
@@ -165,14 +172,14 @@ def generate_final_report(date_str, rec_data, places):
     """
 
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
+        response = client.responses.create(
+            model=GROQ_MODEL,
+            input=prompt
         )
-        return response.text
+        return response.output_text
     except Exception as e:
         errors_log.append({"step": "report_generation", "type": "LLM_ERROR", "message": str(e)})
-        return f"# {date_str} 국내 여행 추천 리포트\n\n[오류 발생] 리포트 생성 실패: {str(e)}"
+        return build_fallback_report(date_str, rec_data, places, str(e))
 
 def main():
     parser = argparse.ArgumentParser(description="AI 여행 플래너 CLI")
